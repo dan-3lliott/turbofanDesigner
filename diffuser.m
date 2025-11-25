@@ -9,5 +9,5 @@ function [Po2, To2] = diffuser(givens)
         rd = 1;
     end
     To2 = givens.Ta*(1+((givens.gamma_diff-1)/2)*givens.M^2);
-    Po2 = rd*etaAdia*givens.Pa/((1+((givens.gamma_diff-1)/2)*givens.M^2)^(-givens.gamma_diff/(givens.gamma_diff-1)));
+    Po2 = rd*givens.Pa*(1+(etaAdia*(givens.gamma_diff-1)/2)*givens.M^2)^(givens.gamma_diff/(givens.gamma_diff-1));
 end

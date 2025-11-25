@@ -29,6 +29,8 @@ givens.Cb1 = 700; %K
 givens.Cbeta1 = 0.245e3; %N*s/kg
 givens.Patm = 101325; %Pa
 givens.Pr_ab = 0.97;
+givens.eta_comb = 0.99; %combustion efficiency in main combustor
+givens.eta_ab = 0.96; %combustion efficiency in afterburner
 
 %define other constraints
 requirements.To4_max = 1300; %K
@@ -40,14 +42,14 @@ requirements.Pr_fan_max = 1.5;
 requirements.beta_max = 12; %this is from the slides, project never gave
 
 %=====DEBUGGING - NO OPTIMIZATION=====
-engineStruct = analyzeEngine([30 1.2 2.0 0.018 0.010 0.1], givens);
+engineStruct = analyzeEngine([30 1.2 2.0 0.018 0.010 0.1], givens, requirements);
 disp(engineStruct);
 
 %define actual flight condition inputs for optimization
-givens.Ta = 220; %K
-givens.Pa = 29e3; %Pa
-givens.M = 0.86;
-requirements.ST = 0.86e3; %N*s/kg
+givens.Ta = 285; %K
+givens.Pa = 100e3; %Pa
+givens.M = 0.0;
+requirements.ST = 2.8e3; %N*s/kg
 
 %=====OPTIMIZATION=====
 %define guesses for design variables
@@ -70,19 +72,34 @@ options = optimoptions("fmincon",...
 "SubproblemAlgorithm","cg",...
 "MaxFunctionEvaluations",1e6,...
 "MaxIterations",1e6);
-objectiveFunction = @(x) calculateTSFC(x, givens);
+objectiveFunction = @(x) calculateTSFC(x, givens, requirements);
 nonlcon = @(x) constraints(x, givens, requirements);
 [out, tsfc, ~, ~, ~, ~, ~] = fmincon(objectiveFunction, x0, [], [], [], [], lb, ub, nonlcon, options);
 
 %outputs
 engineStruct = analyzeEngine(out, givens);
+
+%calculate max fuel-air ratios
+fmax = sym('fmax');
+To4_max_adjusted = requirements.To4_max + givens.Cb1*sqrt(engineStruct.b/requirements.b_max);
+Cp_comb = givens.R*(givens.gamma_comb/(givens.gamma_comb-1));
+To4_expression = ((1-engineStruct.b)*engineStruct.To3 + (fmax*givens.eta_comb*givens.Q_fuel/Cp_comb))/(1+fmax-engineStruct.b);
+implicitSol = To4_expression == To4_max_adjusted;
+engineStruct.f_max = double(vpasolve(implicitSol, fmax, [0 inf]));
+
+Cp_ab = givens.R*(givens.gamma_ab/(givens.gamma_ab-1));
+To6_expression = ((1+engineStruct.f_max)*engineStruct.To5m + (fmax*givens.eta_ab*givens.Q_fuel/Cp_ab))/(1+engineStruct.f_max+fmax);
+implicitSol = To6_expression == requirements.To6_max;
+engineStruct.f_ab_max = double(vpasolve(implicitSol, fmax, [0 inf]));
+
+%save final result
 disp(engineStruct);
 writetable(struct2table(engineStruct), 'engine_out.xlsx');
 
 %objective function
-function tsfc = calculateTSFC(x, givens)
+function tsfc = calculateTSFC(x, givens, requirements)
     %perform analysis
-    engineStruct = analyzeEngine(x, givens);
+    engineStruct = analyzeEngine(x, givens, requirements);
 
     %tsfc objective
     tsfc = engineStruct.TSFC;
@@ -91,7 +108,7 @@ end
 %nonlinear constraint function
 function [c, ceq] = constraints(x, givens, requirements)
     %perform analysis
-    engineStruct = analyzeEngine(x, givens);
+    engineStruct = analyzeEngine(x, givens, requirements);
     %calculate specific thrust and constrain
     ceq(1) = requirements.ST - engineStruct.ST;
     %calculate To4 and constrain
@@ -112,7 +129,7 @@ function [Pr_comp, Pr_fan, beta, f, f_ab, b] = unpack(x)
 end
 
 %engine analysis function
-function engineStruct = analyzeEngine(x, givens)
+function engineStruct = analyzeEngine(x, givens, requirements)
     %=====COMPONENT FRONT-TO-BACK ANALYSIS=====
     
     %unpack design variables
@@ -128,13 +145,15 @@ function engineStruct = analyzeEngine(x, givens)
     %fuel pump work
     engineStruct.Wdot_fpump = fpump(givens, engineStruct.Po3, engineStruct.f, engineStruct.f_ab);
     %combustor exit properties
-    [engineStruct.Po4, engineStruct.To4] = combustor(givens, engineStruct.Po3, engineStruct.To3, engineStruct.f);
+    [engineStruct.Po4, engineStruct.To4] = combustor(givens, engineStruct.Po3, engineStruct.To3, engineStruct.f, engineStruct.b);
     %turbine exit properties - no bleed
-    [engineStruct.Po51, engineStruct.To51] = turbine(givens, engineStruct.Wdot_fan, engineStruct.Wdot_comp, engineStruct.Wdot_fpump, engineStruct.To4, engineStruct.Po4, engineStruct.b);
+    [engineStruct.Po51, engineStruct.To51] = turbine(givens, engineStruct.Wdot_comp + engineStruct.Wdot_fpump, engineStruct.To4, engineStruct.Po4, engineStruct.b, engineStruct.f);
     %mixed turbine exit properties
-    [engineStruct.Po5m, engineStruct.To5m] = turbine_mixer(engineStruct.Po51, engineStruct.To51, engineStruct.b, engineStruct.To3);
+    [engineStruct.Po5m, engineStruct.To5m] = turbine_mixer(givens, engineStruct.Po51, engineStruct.To51, engineStruct.b, engineStruct.Po3, engineStruct.To3);
+    %fan turbine
+    [engineStruct.Po52, engineStruct.To52] = turbine(givens, engineStruct.Wdot_fan, engineStruct.To5m, engineStruct.Po5m, 0, engineStruct.f);
     %afterburner exit properties
-    [engineStruct.Po6, engineStruct.To6] = afterburner(givens, engineStruct.Po5m, engineStruct.To5m, engineStruct.f_ab);
+    [engineStruct.Po6, engineStruct.To6] = afterburner(givens, engineStruct.Po52, engineStruct.To52, engineStruct.f, engineStruct.f_ab);
     %nozzle exit properties and velocity
     [engineStruct.ue, engineStruct.Te, engineStruct.Pe] = nozzle(givens, engineStruct.Po6, engineStruct.To6);
     
@@ -144,11 +163,15 @@ function engineStruct = analyzeEngine(x, givens)
     engineStruct.u = givens.M*sqrt(givens.gamma_diff*givens.R*givens.Ta);
     
     %calculate specific thrust and fuel consumption
-    engineStruct.ST = ((1+engineStruct.f)*engineStruct.ue - engineStruct.u) + engineStruct.beta*(engineStruct.uef - engineStruct.u) - engineStruct.d; %assuming pe = pa and applying knockdown from bypass fan
-    engineStruct.TSFC = (engineStruct.f)/engineStruct.ST;
+    engineStruct.ST = ((1+engineStruct.f+engineStruct.f_ab)*engineStruct.ue - engineStruct.u) + engineStruct.beta*(engineStruct.uef - engineStruct.u) - engineStruct.d; %assuming pe = pa and applying knockdown from bypass fan
+    engineStruct.TSFC = (engineStruct.f+engineStruct.f_ab)/engineStruct.ST;
 
     %calculate efficiencies
-    engineStruct.etath = (((1 + engineStruct.f) * (((engineStruct.ue)^2) / 2) - (((engineStruct.u)^2) / 2)) + engineStruct.beta*(engineStruct.uef^2 - engineStruct.u^2)/2) / ((engineStruct.f) * givens.Q_fuel);
-    engineStruct.etap = 2 * (((1+engineStruct.f)*(engineStruct.ue/engineStruct.u) - 1)/((1+engineStruct.f)*((engineStruct.ue/engineStruct.u)^2) - 1)); 
+    engineStruct.etath = (((1 + engineStruct.f + engineStruct.f_ab) * (((engineStruct.ue)^2) / 2) - (((engineStruct.u)^2) / 2)) + engineStruct.beta*(engineStruct.uef^2 - engineStruct.u^2)/2) / ((engineStruct.f + engineStruct.f_ab) * givens.Q_fuel);
+    num = engineStruct.ST*engineStruct.u;
+    term1 = (1+engineStruct.f+engineStruct.f_ab)*(engineStruct.ue^2 - engineStruct.u^2)/2;
+    term2 = engineStruct.beta*(engineStruct.uef^2 - engineStruct.u^2)/2;
+    den = term1+term2;
+    engineStruct.etap = (num/den);
     engineStruct.etao = engineStruct.etap * engineStruct.etath;
 end
