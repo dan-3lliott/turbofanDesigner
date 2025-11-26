@@ -126,6 +126,27 @@ disp('Double-Optimized Engine At Takeoff:');
 disp(engineAtTakeoff);
 writetable(struct2table(engineAtTakeoff), 'data outputs/double_optimized_engine_at_takeoff.xlsx');
 
+%generate plot of ST versus f
+fSweep = linspace(0.015, engineAtTakeoff.f);
+STsweep = [];
+tsfcSweep = [];
+inputs = out;
+for i = 1:length(fSweep)
+    inputs(5) = fSweep(i);
+    [nah, engineSweep] = analyzeEngine(inputs, givens, conditions);
+    STsweep = [STsweep engineSweep.ST];
+    tsfcSweep = [tsfcSweep engineSweep.TSFC];
+end
+figure
+hold on
+yyaxis left;
+plot(fSweep, STsweep);
+xlabel('f');
+ylabel('ST (N*s/kg)');
+yyaxis right;
+plot(fSweep, tsfcSweep);
+ylabel('TSFC (kg/(N*s))');
+
 %objective function
 function ST = calculateST(x, givens, conditions)
     %perform analysis
