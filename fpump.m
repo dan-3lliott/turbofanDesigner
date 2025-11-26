@@ -1,4 +1,4 @@
-function Wdot_fpump = fpump(givens, Po3, f, f_ab)
+function [Wdot_fpump, Pf2] = fpump(givens, Po3, f, f_ab)
     %=====ASSUMPTIONS=====
     etaAdia = 0.35;
     %=====CALCULATIONS=====

@@ -42,14 +42,9 @@ requirements.Pr_fan_max = 1.5;
 requirements.beta_max = 12; %this is from the slides, project never gave
 
 %=====DEBUGGING - NO OPTIMIZATION=====
-engineStruct = analyzeEngine([30 1.2 2.0 0.018 0.010 0.1], givens, requirements);
+engineStruct = analyzeEngine([30 1.2 2.0 0.018 0.010 0.1], givens);
+disp('Testcase Engine:');
 disp(engineStruct);
-
-%define actual flight condition inputs for optimization
-givens.Ta = 285; %K
-givens.Pa = 100e3; %Pa
-givens.M = 0.0;
-requirements.ST = 2.8e3; %N*s/kg
 
 %=====OPTIMIZATION=====
 %define guesses for design variables
@@ -65,6 +60,14 @@ x0 = [Pr_comp_guess, Pr_fan_guess, beta_guess, f_guess, f_ab_guess, b_guess];
 lb = [0 requirements.Pr_fan_min 0 0 0 0];
 ub = [requirements.Pr_comp_max requirements.Pr_fan_max requirements.beta_max inf inf requirements.b_max];
 
+%=====CRUISE ENGINE=====
+
+%define cruise flight condition inputs for optimization
+givens.Ta = 220; %K
+givens.Pa = 29e3; %Pa
+givens.M = 0.86;
+requirements.ST = 0.86e3; %N*s/kg
+
 %begin optimization
 options = optimoptions("fmincon",...
 "Algorithm","interior-point",...
@@ -72,7 +75,7 @@ options = optimoptions("fmincon",...
 "SubproblemAlgorithm","cg",...
 "MaxFunctionEvaluations",1e6,...
 "MaxIterations",1e6);
-objectiveFunction = @(x) calculateTSFC(x, givens, requirements);
+objectiveFunction = @(x) calculateTSFC(x, givens);
 nonlcon = @(x) constraints(x, givens, requirements);
 [out, tsfc, ~, ~, ~, ~, ~] = fmincon(objectiveFunction, x0, [], [], [], [], lb, ub, nonlcon, options);
 
@@ -92,14 +95,15 @@ To6_expression = ((1+engineStruct.f_max)*engineStruct.To5m + (fmax*givens.eta_ab
 implicitSol = To6_expression == requirements.To6_max;
 engineStruct.f_ab_max = double(vpasolve(implicitSol, fmax, [0 inf]));
 
-%save final result
+%save final optimized result
+disp('Cruise-Optimized Engine:');
 disp(engineStruct);
-writetable(struct2table(engineStruct), 'engine_out.xlsx');
+writetable(struct2table(engineStruct), 'data outputs/cruise_optimized_engine.xlsx');
 
 %objective function
-function tsfc = calculateTSFC(x, givens, requirements)
+function tsfc = calculateTSFC(x, givens)
     %perform analysis
-    engineStruct = analyzeEngine(x, givens, requirements);
+    engineStruct = analyzeEngine(x, givens);
 
     %tsfc objective
     tsfc = engineStruct.TSFC;
@@ -108,7 +112,7 @@ end
 %nonlinear constraint function
 function [c, ceq] = constraints(x, givens, requirements)
     %perform analysis
-    engineStruct = analyzeEngine(x, givens, requirements);
+    engineStruct = analyzeEngine(x, givens);
     %calculate specific thrust and constrain
     ceq(1) = requirements.ST - engineStruct.ST;
     %calculate To4 and constrain
@@ -129,7 +133,7 @@ function [Pr_comp, Pr_fan, beta, f, f_ab, b] = unpack(x)
 end
 
 %engine analysis function
-function engineStruct = analyzeEngine(x, givens, requirements)
+function engineStruct = analyzeEngine(x, givens)
     %=====COMPONENT FRONT-TO-BACK ANALYSIS=====
     
     %unpack design variables
@@ -143,7 +147,7 @@ function engineStruct = analyzeEngine(x, givens, requirements)
     %compressor exit properties
     [engineStruct.Po3, engineStruct.To3, engineStruct.Wdot_comp] = compressor(givens, engineStruct.Po3f, engineStruct.To3f, engineStruct.Pr_comp);
     %fuel pump work
-    engineStruct.Wdot_fpump = fpump(givens, engineStruct.Po3, engineStruct.f, engineStruct.f_ab);
+    [engineStruct.Wdot_fpump, engineStruct.Pf2] = fpump(givens, engineStruct.Po3, engineStruct.f, engineStruct.f_ab);
     %combustor exit properties
     [engineStruct.Po4, engineStruct.To4] = combustor(givens, engineStruct.Po3, engineStruct.To3, engineStruct.f, engineStruct.b);
     %turbine exit properties - no bleed
